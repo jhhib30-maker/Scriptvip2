@@ -1,0 +1,1630 @@
+-- ═══════════════════════════════════════════════════════
+-- AVATAR + MOOD + FACE + EMOTE + ANIMATION + SCRIPT HUB (FULL BYPASS + SHARE)
+-- ═══════════════════════════════════════════════════════
+
+local cloneref = cloneref or function(o) return o end
+local function svc(s) return cloneref(game:GetService(s)) end
+
+local Players = svc("Players")
+local HttpService = svc("HttpService")
+local UserInputService = svc("UserInputService")
+local TweenService = svc("TweenService")
+local MarketplaceService = svc("MarketplaceService")
+local RunService = svc("RunService")
+local InsertService = svc("InsertService")
+local KeyframeSequenceProvider = svc("KeyframeSequenceProvider")
+
+local player = Players.LocalPlayer
+
+local FILE_NAME = "saved_avatars.json"
+local MOOD_FILE = "fe_moods.json"
+local FACE_FILE = "fe_faces.json"
+local LOG_FILE = "avatar_hub_log.txt"
+
+-- ═══════════════════════════════════════════════════════
+-- 1. GOD MODE & CUSTOM FACE
+-- ═══════════════════════════════════════════════════════
+local EPIC_HEAD_ID = 95240587613909
+
+local function setupGodMode(char)
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	hum.MaxHealth = math.huge
+	hum.Health = math.huge
+	hum.Died:Connect(function() task.wait(0.1); if hum then hum.Health = hum.MaxHealth end end)
+	RunService.Heartbeat:Connect(function()
+		if hum.Parent and hum.Health < hum.MaxHealth then hum.Health = hum.MaxHealth end
+	end)
+end
+
+local function applyCustomFace(head, faceId)
+	if not head or not faceId then return end
+	local tex = "rbxassetid://" .. tostring(faceId)
+	local function ensureFace()
+		local ex = head:FindFirstChild("custom_face")
+		if ex and ex.Texture == tex then return end
+		for _, d in ipairs(head:GetChildren()) do
+			if d:IsA("Decal") then d:Destroy() end
+		end
+		local dec = Instance.new("Decal")
+		dec.Name = "custom_face"; dec.Texture = tex
+		dec.Face = Enum.NormalId.Front; dec.Transparency = 0; dec.Parent = head
+	end
+	ensureFace()
+	head.ChildAdded:Connect(function(c)
+		if c:IsA("Decal") and c.Name:lower() == "face" then c:Destroy(); task.defer(ensureFace) end
+	end)
+	head.ChildRemoved:Connect(function(c)
+		if c:IsA("Decal") then task.defer(ensureFace) end
+	end)
+end
+
+local function changeToEpicHead(char)
+	local oldHead = char:FindFirstChild("Head")
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not oldHead or not hum then return end
+	local headAccessories = {}
+	for _, acc in ipairs(char:GetChildren()) do
+		if acc:IsA("Accessory") then
+			local handle = acc:FindFirstChild("Handle")
+			if handle and handle:FindFirstChild("AccessoryWeld") then
+				local weld = handle.AccessoryWeld
+				if weld.Part0 == oldHead or weld.Part1 == oldHead then
+					table.insert(headAccessories, acc:Clone())
+				end
+			end
+		end
+	end
+	local desc = Instance.new("HumanoidDescription")
+	desc.Head = EPIC_HEAD_ID
+	local success, model = pcall(function()
+		return Players:CreateHumanoidModelFromDescriptionAsync(desc, Enum.HumanoidRigType.R15)
+	end)
+	if success and model then
+		local newHead = model:FindFirstChild("Head")
+		if newHead and oldHead.Parent then
+			local bodyColors = char:FindFirstChildOfClass("BodyColors")
+			if bodyColors then newHead.Color = bodyColors.HeadColor3 end
+			newHead.CFrame = oldHead.CFrame; newHead.CanCollide = false; newHead.Massless = true; newHead.Parent = char
+			local neck = char:FindFirstChild("Neck", true)
+			if neck then neck.Part1 = newHead end
+			oldHead.Transparency = 1; oldHead.CanCollide = false; oldHead.Massless = true; oldHead.CFrame = newHead.CFrame
+			task.wait(0.1)
+			for _, clonedAcc in ipairs(headAccessories) do pcall(function() hum:AddAccessory(clonedAcc) end) end
+			if _G.LogLabel then _G.LogLabel.Text = "✅ Đã thay Epic Head\n" .. _G.LogLabel.Text end
+		end
+		model:Destroy()
+	end
+end
+
+local function onCharacter(char)
+	task.wait(1)
+	setupGodMode(char)
+end
+
+if player.Character then task.spawn(function() onCharacter(player.Character) end) end
+player.CharacterAdded:Connect(onCharacter)
+
+-- ═══════════════════════════════════════════════════════
+-- 2. HELPERS
+-- ═══════════════════════════════════════════════════════
+local function log(msg)
+	local t = "[" .. os.date("%H:%M:%S") .. "] " .. msg
+	print(t)
+	if appendfile then pcall(function() appendfile(LOG_FILE, t .. "\n") end) end
+	if _G.LogLabel and _G.LogLabel.Parent then _G.LogLabel.Text = t .. "\n" .. _G.LogLabel.Text end
+end
+
+local function httpGetJson(url)
+	local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+	if httpRequest then
+		local ok, response = pcall(function()
+			return httpRequest({ Url = url, Method = "GET", Headers = { ["User-Agent"] = "Mozilla/5.0" } })
+		end)
+		if ok and response and response.Body then
+			local decOk, decoded = pcall(function() return HttpService:JSONDecode(response.Body) end)
+			if decOk and type(decoded) == "table" then return true, decoded end
+		end
+	end
+	local okGet, body = pcall(function() return game:HttpGet(url) end)
+	if okGet and body then
+		local decOk, decoded = pcall(function() return HttpService:JSONDecode(body) end)
+		if decOk and type(decoded) == "table" then return true, decoded end
+	end
+	return false, nil
+end
+
+local function parseColor(s)
+	if typeof(s) == "Color3" then return s end
+	if type(s) == "string" then
+		local r, g, b = s:match("([%d.]+),%s*([%d.]+),%s*([%d.]+)")
+		if r then return Color3.new(tonumber(r), tonumber(g), tonumber(b)) end
+	end
+	return Color3.new(1, 1, 1)
+end
+
+local function getAnimId(id)
+	local ok, obj = pcall(function() return game:GetObjects("rbxassetid://" .. math.floor(id)) end)
+	if ok and #obj > 0 then
+		local r = obj[1]
+		if r:IsA("Animation") and r.AnimationId ~= "" then return r.AnimationId end
+		for _, d in ipairs(r:GetDescendants()) do
+			if d:IsA("Animation") and d.AnimationId ~= "" then return d.AnimationId end
+		end
+	end
+	return "rbxassetid://" .. tostring(id)
+end
+
+local function readJSON(file)
+	if isfile and isfile(file) then
+		local ok, d = pcall(function() return HttpService:JSONDecode(readfile(file)) end)
+		if ok and type(d) == "table" then return d end
+	end
+	return {}
+end
+
+local function writeJSON(file, data)
+	if writefile then writefile(file, HttpService:JSONEncode(data)) end
+end
+
+local function getThumbnail(uid)
+	local ok, img = pcall(function() return Players:GetUserThumbnailAsync(uid, Enum.ThumbnailType.AvatarBust, Enum.ThumbnailSize.Size420x420) end)
+	return ok and img or nil
+end
+
+local function prepClone(clone)
+	for _, d in ipairs(clone:GetDescendants()) do
+		if d:IsA("Motor6D") or d:IsA("Weld") or d:IsA("WeldConstraint") then d:Destroy()
+		elseif d:IsA("Decal") and d.Name:lower() == "face" then d:Destroy() end
+	end
+	clone.Anchored = false; clone.CanCollide = false; clone.Massless = true
+end
+
+local function attachAccessory(character, acc)
+	local handle = acc:FindFirstChild("Handle"); if not handle then return end
+	local handleAtt = handle:FindFirstChildOfClass("Attachment"); if not handleAtt then return end
+	local target
+	for _, d in ipairs(character:GetDescendants()) do
+		if d:IsA("Attachment") and d.Name == handleAtt.Name and d.Parent:IsA("BasePart") then target = d; break end
+	end
+	if not target then return end
+	local base = target.Parent; local c = handle:Clone(); prepClone(c)
+	local mesh = c:FindFirstChildOfClass("SpecialMesh"); if mesh then mesh.Scale = Vector3.new(1, 1, 1) end
+	c.CFrame = base.CFrame * target.CFrame * handleAtt.CFrame:Inverse(); c.Parent = character
+	local w = Instance.new("Weld"); w.Part0 = base; w.Part1 = c; w.C0 = target.CFrame; w.C1 = handleAtt.CFrame; w.Parent = c
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 3. MOOD & EMOTE ENGINE
+-- ═══════════════════════════════════════════════════════
+local moodState = {
+	currentTrack = nil, currentId = nil, currentName = nil, currentFaceId = nil,
+	cfg = { weight = 1, speed = 1, priority = Enum.AnimationPriority.Action4, looped = false },
+}
+
+local function getAnimator()
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then return nil end
+	return hum:FindFirstChildOfClass("Animator") or hum:WaitForChild("Animator", 3)
+end
+
+local function stopMood()
+	if moodState.currentTrack then
+		pcall(function() moodState.currentTrack:Stop(0) end)
+		pcall(function() moodState.currentTrack:Destroy() end)
+		moodState.currentTrack = nil
+	end
+	moodState.currentId = nil; moodState.currentName = nil; moodState.currentFaceId = nil
+end
+
+local function playMood(id, name, faceId)
+	local animator = getAnimator(); if not animator then return end
+	stopMood()
+	local animId = getAnimId(id); local a = Instance.new("Animation"); a.AnimationId = animId
+	local t = animator:LoadAnimation(a)
+	t.Priority = moodState.cfg.priority; t.Looped = moodState.cfg.looped
+	t:AdjustWeight(moodState.cfg.weight); t:AdjustSpeed(moodState.cfg.speed)
+	moodState.currentTrack = t; moodState.currentId = id; moodState.currentName = name; moodState.currentFaceId = faceId
+	t:Play()
+	if faceId then
+		local char = player.Character; local head = char:FindFirstChild("Head")
+		for _, p in ipairs(char:GetChildren()) do if p.Name == "Head" and p.Transparency == 0 then head = p end end
+		applyCustomFace(head, faceId)
+	end
+	if not moodState.cfg.looped then
+		t.Stopped:Connect(function() if moodState.currentTrack == t and moodState.currentId == id then t:Play() end end)
+	end
+	log("Play mood: " .. (name or tostring(id)))
+end
+
+local function refreshMood()
+	if not moodState.currentTrack then return end
+	moodState.currentTrack.Priority = moodState.cfg.priority
+	moodState.currentTrack.Looped = moodState.cfg.looped
+	moodState.currentTrack:AdjustWeight(moodState.cfg.weight)
+	moodState.currentTrack:AdjustSpeed(moodState.cfg.speed)
+end
+
+local currentEmoteTrack = nil
+
+local function playEmote(assetId, name)
+	local animator = getAnimator(); if not animator then return end
+	if currentEmoteTrack then currentEmoteTrack:Stop(); currentEmoteTrack = nil end
+	local animId = getAnimId(assetId); local anim = Instance.new("Animation"); anim.AnimationId = animId
+	local track = animator:LoadAnimation(anim)
+	track.Priority = Enum.AnimationPriority.Action4; track.Looped = false; track:Play()
+	currentEmoteTrack = track
+	log("💃 Đang chạy emote: " .. name)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 4. APPLY ANIMATION BUNDLE (MULTI-METHOD BYPASS)
+-- ═══════════════════════════════════════════════════════
+local function applyAnimationBundle(bundleId, name)
+	local char = player.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum then log("❌ Không tìm thấy nhân vật"); return end
+
+	log("⏳ Đang tải animation bundle: " .. name)
+
+	local url = "https://catalog.roblox.com/v1/bundles/" .. bundleId .. "/details"
+	local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+
+	if not httpRequest then log("❌ Executor không hỗ trợ HTTP request!"); return end
+
+	task.spawn(function()
+		local ok, response = pcall(function() return httpRequest({ Url = url, Method = "GET" }) end)
+		if not (ok and response and response.Body) then log("❌ Lỗi mạng khi lấy bundle info"); return end
+
+		local decodeOk, bundleInfo = pcall(function() return HttpService:JSONDecode(response.Body) end)
+		if not (decodeOk and bundleInfo and bundleInfo.items) then log("❌ Dữ liệu bundle không hợp lệ"); return end
+
+		local animIds = {}
+		for _, item in ipairs(bundleInfo.items) do
+			if item.id and item.type == "Asset" then
+				local okProd, prodInfo = pcall(function() return MarketplaceService:GetProductInfo(item.id) end)
+				if okProd and prodInfo then
+					local assetType = prodInfo.AssetTypeId
+					if assetType == 48 then animIds.Climb = item.id
+					elseif assetType == 49 then animIds.Death = item.id
+					elseif assetType == 50 then animIds.Fall = item.id
+					elseif assetType == 51 then animIds.Idle = item.id
+					elseif assetType == 52 then animIds.Jump = item.id
+					elseif assetType == 53 then animIds.Run = item.id
+					elseif assetType == 54 then animIds.Swim = item.id
+					elseif assetType == 55 then animIds.Walk = item.id
+					end
+				end
+			end
+		end
+
+		for _, track in pairs(hum:GetPlayingAnimationTracks()) do
+			track:Stop()
+		end
+		local animator = hum:FindFirstChild("Animator") or Instance.new("Animator", hum)
+
+		local function playAnim(animObject)
+			if not animObject then return end
+			local track = animator:LoadAnimation(animObject)
+			track.Priority = Enum.AnimationPriority.Action4
+			track.Looped = true
+			track:Play()
+		end
+
+		local function bypassWithKeyframeSequence(assetId)
+			local success, result = pcall(function()
+				local model = InsertService:LoadAsset(assetId)
+				task.wait(0.1)
+				local keyframeSequence = model:FindFirstChildWhichIsA("KeyframeSequence")
+				if keyframeSequence then
+					local hashId = KeyframeSequenceProvider:RegisterKeyframeSequence(keyframeSequence)
+					if hashId then
+						local anim = Instance.new("Animation")
+						anim.AnimationId = hashId
+						return anim
+					end
+				end
+				model:Destroy()
+				return nil
+			end)
+			return success and result or nil
+		end
+
+		local idleAnim = bypassWithKeyframeSequence(animIds.Idle)
+		local runAnim = bypassWithKeyframeSequence(animIds.Run)
+		local walkAnim = bypassWithKeyframeSequence(animIds.Walk)
+
+		if idleAnim or runAnim or walkAnim then
+			if idleAnim then playAnim(idleAnim) end
+			if runAnim then playAnim(runAnim) end
+			if walkAnim then playAnim(walkAnim) end
+			log("✅ Đã áp animation (Bypass KeyframeSequence): " .. name)
+			return
+		end
+
+		log("⚠️ Phương pháp 1 thất bại, thử phương pháp 2...")
+
+		local function getRealAnimation(id)
+			if not id then return nil end
+			local ok, objs = pcall(function() return game:GetObjects("rbxassetid://" .. id) end)
+			if ok and objs and #objs > 0 then
+				for _, obj in ipairs(objs) do
+					if obj:IsA("Animation") then return obj end
+				end
+			end
+			return nil
+		end
+
+		local idleReal = getRealAnimation(animIds.Idle)
+		local runReal = getRealAnimation(animIds.Run)
+		local walkReal = getRealAnimation(animIds.Walk)
+
+		if idleReal then playAnim(idleReal) end
+		if runReal then playAnim(runReal) end
+		if walkReal then playAnim(walkReal) end
+
+		if idleReal or runReal or walkReal then
+			log("✅ Đã áp animation (Bypass GetObjects): " .. name)
+		else
+			log("❌ Tất cả phương pháp bypass đều thất bại cho bundle: " .. name)
+		end
+	end)
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 5. SAVE / LOAD AVATAR & SHARE CODE (NO SERVER)
+-- ═══════════════════════════════════════════════════════
+local BASE64_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+local function toBase64(str)
+	local out = {}
+	for i = 1, #str, 3 do
+		local b1 = str:byte(i) or 0
+		local b2 = str:byte(i + 1)
+		local b3 = str:byte(i + 2)
+
+		local n = b1 * 65536 + (b2 or 0) * 256 + (b3 or 0)
+		local c1 = math.floor(n / 262144) % 64 + 1
+		local c2 = math.floor(n / 4096) % 64 + 1
+		local c3 = b2 and (math.floor(n / 64) % 64 + 1) or nil
+		local c4 = b3 and (n % 64 + 1) or nil
+
+		table.insert(out, BASE64_CHARS:sub(c1, c1))
+		table.insert(out, BASE64_CHARS:sub(c2, c2))
+		table.insert(out, c3 and BASE64_CHARS:sub(c3, c3) or "=")
+		table.insert(out, c4 and BASE64_CHARS:sub(c4, c4) or "=")
+	end
+	return "AVH1:" .. table.concat(out)
+end
+
+local function fromBase64(encoded)
+	if type(encoded) ~= "string" then return nil end
+	local clean = encoded:gsub("^%s+", ""):gsub("%s+", "")
+	if clean:sub(1, 5) == "AVH1:" then
+		clean = clean:sub(6)
+	end
+	if #clean == 0 or #clean % 4 ~= 0 then return nil end
+
+	local map = {}
+	for i = 1, #BASE64_CHARS do
+		map[BASE64_CHARS:sub(i, i)] = i - 1
+	end
+
+	local out = {}
+	for i = 1, #clean, 4 do
+		local ch1 = clean:sub(i, i)
+		local ch2 = clean:sub(i + 1, i + 1)
+		local ch3 = clean:sub(i + 2, i + 2)
+		local ch4 = clean:sub(i + 3, i + 3)
+
+		local v1 = map[ch1]
+		local v2 = map[ch2]
+		if not v1 or not v2 then return nil end
+
+		local v3 = (ch3 == "=") and 0 or map[ch3]
+		local v4 = (ch4 == "=") and 0 or map[ch4]
+		if not v3 or not v4 then return nil end
+
+		local n = v1 * 262144 + v2 * 4096 + v3 * 64 + v4
+		local b1 = math.floor(n / 65536) % 256
+		local b2 = math.floor(n / 256) % 256
+		local b3 = n % 256
+
+		table.insert(out, string.char(b1))
+		if ch3 ~= "=" then table.insert(out, string.char(b2)) end
+		if ch4 ~= "=" then table.insert(out, string.char(b3)) end
+	end
+	return table.concat(out)
+end
+
+local function buildAvatarPayload(customName)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid then return nil end
+
+	local desc = humanoid:GetAppliedDescription()
+	local saveData = {
+		name = (customName and customName ~= "") and customName or ("Avatar_" .. os.time()),
+		thumbnail = getThumbnail(player.UserId),
+		bodyColors = {
+			headColor = tostring(desc.HeadColor), torsoColor = tostring(desc.TorsoColor),
+			leftArmColor = tostring(desc.LeftArmColor), rightArmColor = tostring(desc.RightArmColor),
+			leftLegColor = tostring(desc.LeftLegColor), rightLegColor = tostring(desc.RightLegColor),
+		},
+		bodyTypeScale = desc.BodyTypeScale or 1.0, headAssetId = desc.Head,
+		assets = {}, animations = {}, headInfo = {}, headDecals = {}, mood = nil,
+	}
+
+	local head = character:FindFirstChild("Head")
+	if head then
+		saveData.headInfo = {
+			name = head.Name, size = {head.Size.X, head.Size.Y, head.Size.Z},
+			color = tostring(head.Color), transparency = head.Transparency,
+			material = tostring(head.Material), className = head.ClassName,
+		}
+		local mesh = head:FindFirstChildOfClass("SpecialMesh")
+		if mesh then
+			saveData.headInfo.mesh = {
+				meshId = mesh.MeshId, textureId = mesh.TextureId,
+				scale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z},
+				offset = {mesh.Offset.X, mesh.Offset.Y, mesh.Offset.Z},
+			}
+		end
+		if head:IsA("MeshPart") then saveData.headInfo.meshId = head.MeshId; saveData.headInfo.textureId = head.TextureID end
+		for _, d in ipairs(head:GetChildren()) do
+			if d:IsA("Decal") then table.insert(saveData.headDecals, {name = d.Name, texture = d.Texture, face = tostring(d.Face), transparency = d.Transparency}) end
+		end
+	end
+
+	local okAcc, accList = pcall(function() return desc:GetAccessories(true) end)
+	if okAcc and accList then
+		for _, acc in ipairs(accList) do
+			if acc.AssetId and acc.AssetId ~= 0 then table.insert(saveData.assets, {type = "Accessory", id = acc.AssetId}) end
+		end
+	end
+
+	for _, v in ipairs(character:GetChildren()) do
+		if v:IsA("Shirt") then table.insert(saveData.assets, {type = "Shirt", template = v.ShirtTemplate})
+		elseif v:IsA("Pants") then table.insert(saveData.assets, {type = "Pants", template = v.PantsTemplate}) end
+	end
+
+	local animate = character:FindFirstChild("Animate")
+	if animate then
+		local anims = {}
+		for _, d in ipairs(animate:GetDescendants()) do
+			if d:IsA("Animation") and d.AnimationId ~= "" then table.insert(anims, {name = d.Name, id = d.AnimationId}) end
+		end
+		saveData.animations = anims
+	end
+
+	if moodState.currentId then saveData.mood = {id = moodState.currentId, name = moodState.currentName, faceId = moodState.currentFaceId} end
+	return saveData
+end
+
+local function saveAvatar(customName)
+	local saveData = buildAvatarPayload(customName)
+	if not saveData then return false end
+	local all = readJSON(FILE_NAME); table.insert(all, saveData); writeJSON(FILE_NAME, all)
+	log("Đã lưu: " .. saveData.name); return true
+end
+
+local function exportAvatarCode(avatarData, renameTo)
+	if type(avatarData) ~= "table" then return nil end
+	local payload = {
+		name = (renameTo and renameTo ~= "") and renameTo or (avatarData.name or "Shared_Avatar"),
+		thumbnail = avatarData.thumbnail,
+		bodyColors = avatarData.bodyColors,
+		bodyTypeScale = avatarData.bodyTypeScale,
+		headAssetId = avatarData.headAssetId,
+		assets = avatarData.assets or {},
+		animations = avatarData.animations or {},
+		headInfo = avatarData.headInfo or {},
+		headDecals = avatarData.headDecals or {},
+		mood = avatarData.mood,
+	}
+	local okJson, jsonStr = pcall(function() return HttpService:JSONEncode(payload) end)
+	if not okJson or not jsonStr then return nil end
+	return toBase64(jsonStr)
+end
+
+local function importAvatarCode(shareCode, customName)
+	local rawJson = fromBase64(shareCode)
+	if not rawJson then
+		local trimmed = tostring(shareCode or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if trimmed:sub(1, 1) == "{" then
+			rawJson = trimmed
+		end
+	end
+	if not rawJson then return nil, "Mã chia sẻ không hợp lệ" end
+
+	local okDec, decoded = pcall(function() return HttpService:JSONDecode(rawJson) end)
+	if not okDec or type(decoded) ~= "table" then
+		return nil, "Không đọc được dữ liệu avatar"
+	end
+
+	decoded.name = (customName and customName ~= "") and customName or ((decoded.name or "Imported") .. " (Share)")
+	local all = readJSON(FILE_NAME)
+	table.insert(all, decoded)
+	writeJSON(FILE_NAME, all)
+	return decoded, nil
+end
+
+local function loadAvatar(data)
+	local character = player.Character
+	local humanoid = character and character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or not data then return false end
+
+	if _G.PreviewImage then _G.PreviewImage.Image = data.thumbnail or getThumbnail(player.UserId) or "" end
+
+	local bc = character:FindFirstChildOfClass("BodyColors")
+	if bc and data.bodyColors then
+		bc.HeadColor3 = parseColor(data.bodyColors.headColor); bc.TorsoColor3 = parseColor(data.bodyColors.torsoColor)
+		bc.LeftArmColor3 = parseColor(data.bodyColors.leftArmColor); bc.RightArmColor3 = parseColor(data.bodyColors.rightArmColor)
+		bc.LeftLegColor3 = parseColor(data.bodyColors.leftLegColor); bc.RightLegColor3 = parseColor(data.bodyColors.rightLegColor)
+	end
+
+	for _, v in ipairs(character:GetChildren()) do
+		if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants") then v:Destroy() end
+	end
+
+	for _, item in ipairs(data.assets or {}) do
+		if item.type == "Shirt" and item.template then local s = Instance.new("Shirt"); s.ShirtTemplate = item.template; s.Parent = character
+		elseif item.type == "Pants" and item.template then local p = Instance.new("Pants"); p.PantsTemplate = item.template; p.Parent = character end
+	end
+
+	for _, item in ipairs(data.assets or {}) do
+		if item.type == "Accessory" and item.id then
+			local okGet, objs = pcall(function() return game:GetObjects("rbxassetid://" .. item.id) end)
+			if okGet and objs and #objs > 0 then
+				local src = objs[1]
+				if src:IsA("Accessory") then attachAccessory(character, src)
+				elseif src:IsA("Model") then for _, c in ipairs(src:GetChildren()) do if c:IsA("Accessory") then attachAccessory(character, c) end end end
+			end
+		end
+	end
+
+	if data.headAssetId and data.headAssetId ~= 0 then
+		local cur = humanoid:GetAppliedDescription()
+		if cur.Head ~= data.headAssetId then cur.Head = data.headAssetId; pcall(function() humanoid:ApplyDescription(cur) end); task.wait(0.15) end
+	end
+
+	local head = character:FindFirstChild("Head")
+	if head then
+		head.Transparency = 0
+		if data.headInfo and data.headInfo.mesh then
+			local mesh = head:FindFirstChildOfClass("SpecialMesh") or Instance.new("SpecialMesh", head)
+			mesh.MeshId = data.headInfo.mesh.meshId or ""; mesh.TextureId = data.headInfo.mesh.textureId or ""
+			if data.headInfo.mesh.scale then mesh.Scale = Vector3.new(data.headInfo.mesh.scale[1], data.headInfo.mesh.scale[2], data.headInfo.mesh.scale[3]) end
+		end
+		for _, v in ipairs(head:GetChildren()) do if v:IsA("Decal") then v:Destroy() end end
+		if data.headDecals then
+			for _, dec in ipairs(data.headDecals) do
+				local d = Instance.new("Decal"); d.Name = dec.name or "face"; d.Texture = dec.texture
+				d.Face = Enum.NormalId[dec.face] or Enum.NormalId.Front; d.Transparency = dec.transparency or 0; d.Parent = head
+			end
+		end
+	end
+
+	if data.animations then
+		local animate = character:FindFirstChild("Animate")
+		if animate then
+			for _, a in ipairs(data.animations) do
+				local obj = animate:FindFirstChild(a.name, true)
+				if obj and obj:IsA("Animation") then obj.AnimationId = a.id end
+			end
+			animate.Disabled = true; task.wait(0.1); animate.Disabled = false
+		end
+	end
+
+	if data.mood and data.mood.id then
+		task.spawn(function() task.wait(0.2); playMood(data.mood.id, data.mood.name, data.mood.faceId); if _G.SyncMoodUI then _G.SyncMoodUI(data.mood.id) end end)
+	else stopMood() end
+	log("Load xong: " .. (data.name or "?")); return true
+end
+
+-- ═══════════════════════════════════════════════════════
+-- 6. DATA
+-- ═══════════════════════════════════════════════════════
+local defaultMoods = {
+	{id=14618207727, name="Default Mood"}, {id=11163856931, name="Winning Smile"},
+	{id=11822637523, name="Classic M"}, {id=14532855772, name="Skeptic"},
+	{id=11236428476, name="Chill"}, {id=11308848181, name="Err..."},
+}
+local defaultFaces = {{id=12345678, name="Example Face"}}
+local moods, faces = {}, {}
+local function loadData()
+	local data = readJSON(MOOD_FILE)
+	if #data > 0 then for _, m in ipairs(data) do table.insert(moods, m) end
+	else for _, m in ipairs(defaultMoods) do table.insert(moods, m) end; writeJSON(MOOD_FILE, moods) end
+	local fdata = readJSON(FACE_FILE)
+	if #fdata > 0 then for _, f in ipairs(fdata) do table.insert(faces, f) end
+	else for _, f in ipairs(defaultFaces) do table.insert(faces, f) end; writeJSON(FACE_FILE, faces) end
+end
+loadData()
+local function saveMoods() writeJSON(MOOD_FILE, moods) end
+local function saveFaces() writeJSON(FACE_FILE, faces) end
+
+-- ═══════════════════════════════════════════════════════
+-- 7. UI (6 TABS)
+-- ═══════════════════════════════════════════════════════
+local Theme = {
+	Bg = Color3.fromRGB(18, 18, 24), Panel = Color3.fromRGB(26, 26, 34),
+	Item = Color3.fromRGB(36, 36, 46), Text = Color3.fromRGB(240, 240, 250),
+	Sub = Color3.fromRGB(150, 150, 165), Accent1 = Color3.fromRGB(0, 200, 255),
+	Accent2 = Color3.fromRGB(130, 0, 255), Success = Color3.fromRGB(88, 181, 100),
+	Danger = Color3.fromRGB(200, 60, 60), Accent3 = Color3.fromRGB(255, 140, 0),
+}
+
+local gui = Instance.new("ScreenGui")
+gui.Name = "AvatarMoodHub"; gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; gui.DisplayOrder = 999
+pcall(function() gui.Parent = (gethui and gethui()) or player:WaitForChild("PlayerGui") end)
+if not gui.Parent then gui.Parent = player:WaitForChild("PlayerGui") end
+
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0, 50, 0, 50); toggleBtn.Position = UDim2.new(0, 20, 0, 20)
+toggleBtn.Text = "🎭"; toggleBtn.TextSize = 24; toggleBtn.AutoButtonColor = false
+toggleBtn.BackgroundColor3 = Theme.Accent1; toggleBtn.TextColor3 = Color3.new(1,1,1); toggleBtn.BorderSizePixel = 0
+toggleBtn.Parent = gui; Instance.new("UICorner", toggleBtn).CornerRadius = UDim.new(0, 12)
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 680, 0, 500); mainFrame.Position = UDim2.new(0.5, -340, 0.5, -250)
+mainFrame.BackgroundColor3 = Theme.Bg; mainFrame.BorderSizePixel = 0; mainFrame.Visible = false
+mainFrame.Active = true; mainFrame.Draggable = true; mainFrame.Parent = gui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 16)
+local grad = Instance.new("UIGradient"); grad.Color = ColorSequence.new(Theme.Accent1, Theme.Accent2)
+grad.Rotation = 45; grad.Parent = mainFrame
+local mfStroke = Instance.new("UIStroke", mainFrame); mfStroke.Color = Theme.Accent1; mfStroke.Thickness = 2
+
+toggleBtn.MouseButton1Click:Connect(function()
+	mainFrame.Visible = not mainFrame.Visible
+	if mainFrame.Visible then
+		mainFrame.Size = UDim2.new(0, 0, 0, 0)
+		TweenService:Create(mainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back), {Size = UDim2.new(0, 680, 0, 500)}):Play()
+	end
+end)
+
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 40); titleBar.BackgroundColor3 = Theme.Panel
+titleBar.BorderSizePixel = 0; titleBar.ZIndex = 5; titleBar.Parent = mainFrame
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 16)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -80, 1, 0); title.Position = UDim2.new(0, 20, 0, 0)
+title.Text = "AVATAR + MOOD + FACE + EMOTE + ANIM + SCRIPT"; title.TextColor3 = Color3.new(1,1,1)
+title.Font = Enum.Font.GothamBlack; title.TextSize = 13; title.TextXAlignment = Enum.TextXAlignment.Left
+title.BackgroundTransparency = 1; title.ZIndex = 6; title.Parent = titleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 0, 30); closeBtn.Position = UDim2.new(1, -36, 0, 5)
+closeBtn.BackgroundColor3 = Theme.Danger; closeBtn.Text = "X"; closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.Font = Enum.Font.GothamBold; closeBtn.TextSize = 14; closeBtn.ZIndex = 10; closeBtn.Parent = titleBar
+Instance.new("UICorner", closeBtn).CornerRadius = UDim.new(0, 6)
+closeBtn.MouseButton1Click:Connect(function() mainFrame.Visible = false end)
+
+-- 6 TABS
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(1, -20, 0, 32); tabBar.Position = UDim2.new(0, 10, 0, 48)
+tabBar.BackgroundTransparency = 1; tabBar.Parent = mainFrame
+
+local tabs = { "AVATARS", "MOODS", "FACES", "EMOTES", "ANIMS", "SCRIPTS" }
+local tabBtns = {}
+local tabCount = #tabs
+for i, name in ipairs(tabs) do
+	local btn = Instance.new("TextButton")
+	btn.Size = UDim2.new(1/tabCount, -3, 1, 0)
+	btn.Position = UDim2.new((i-1)/tabCount, (i-1)*3, 0, 0)
+	btn.BackgroundColor3 = (i==1) and Theme.Accent1 or Theme.Item
+	btn.Text = name; btn.TextColor3 = (i==1) and Color3.new(1,1,1) or Theme.Text
+	btn.Font = Enum.Font.GothamBold; btn.TextSize = 10; btn.AutoButtonColor = false; btn.Parent = tabBar
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+	tabBtns[name] = btn
+end
+
+local avatarTab, moodTab, faceTab, emoteTab, animTab, scriptTab
+
+local function switchTab(which)
+	if not avatarTab or not moodTab or not faceTab or not emoteTab or not animTab or not scriptTab then return end
+	avatarTab.Visible = (which == "AVATARS")
+	moodTab.Visible = (which == "MOODS")
+	faceTab.Visible = (which == "FACES")
+	emoteTab.Visible = (which == "EMOTES")
+	animTab.Visible = (which == "ANIMS")
+	scriptTab.Visible = (which == "SCRIPTS")
+	for name, btn in pairs(tabBtns) do
+		btn.BackgroundColor3 = (name == which) and Theme.Accent1 or Theme.Item
+		btn.TextColor3 = (name == which) and Color3.new(1,1,1) or Theme.Text
+	end
+end
+for name, btn in pairs(tabBtns) do btn.MouseButton1Click:Connect(function() switchTab(name) end) end
+
+-- ═══════════════════════════════════════════════════════
+-- AVATAR TAB
+-- ═══════════════════════════════════════════════════════
+avatarTab = Instance.new("Frame")
+avatarTab.Size = UDim2.new(1, 0, 1, -90); avatarTab.Position = UDim2.new(0, 0, 0, 90)
+avatarTab.BackgroundTransparency = 1; avatarTab.Visible = true; avatarTab.Parent = mainFrame
+
+local previewFrame = Instance.new("Frame")
+previewFrame.Size = UDim2.new(0, 90, 0, 90); previewFrame.Position = UDim2.new(0, 15, 0, 0)
+previewFrame.BackgroundColor3 = Theme.Item; previewFrame.BorderSizePixel = 0; previewFrame.Parent = avatarTab
+Instance.new("UICorner", previewFrame).CornerRadius = UDim.new(0, 10)
+local pStroke = Instance.new("UIStroke", previewFrame); pStroke.Color = Theme.Accent1
+
+local previewImage = Instance.new("ImageLabel")
+previewImage.Size = UDim2.new(1, -4, 1, -4); previewImage.Position = UDim2.new(0, 2, 0, 2)
+previewImage.BackgroundTransparency = 1; previewImage.Image = getThumbnail(player.UserId) or ""
+previewImage.Parent = previewFrame; Instance.new("UICorner", previewImage).CornerRadius = UDim.new(0, 8)
+_G.PreviewImage = previewImage
+
+local nameInput = Instance.new("TextBox")
+nameInput.Size = UDim2.new(0, 420, 0, 38); nameInput.Position = UDim2.new(0, 115, 0, 0)
+nameInput.BackgroundColor3 = Theme.Item; nameInput.TextColor3 = Color3.new(1,1,1)
+nameInput.Text = ""; nameInput.PlaceholderText = "Tên bộ avatar..."
+nameInput.PlaceholderColor3 = Theme.Sub; nameInput.Font = Enum.Font.GothamMedium
+nameInput.TextSize = 14; nameInput.ClearTextOnFocus = false; nameInput.Parent = avatarTab
+Instance.new("UICorner", nameInput).CornerRadius = UDim.new(0, 8)
+
+local saveBtn = Instance.new("TextButton")
+saveBtn.Size = UDim2.new(0, 305, 0, 40); saveBtn.Position = UDim2.new(0, 115, 0, 46)
+saveBtn.BackgroundColor3 = Theme.Success; saveBtn.Text = "💾 LƯU AVATAR + MOOD + FACE"
+saveBtn.TextColor3 = Color3.new(1,1,1); saveBtn.Font = Enum.Font.GothamBold
+saveBtn.TextSize = 13; saveBtn.AutoButtonColor = false; saveBtn.Parent = avatarTab
+Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 8)
+
+local importBtn = Instance.new("TextButton")
+importBtn.Size = UDim2.new(0, 108, 0, 40); importBtn.Position = UDim2.new(0, 427, 0, 46)
+importBtn.BackgroundColor3 = Theme.Accent2; importBtn.Text = "📥 NHẬP MÃ"
+importBtn.TextColor3 = Color3.new(1,1,1); importBtn.Font = Enum.Font.GothamBold
+importBtn.TextSize = 12; importBtn.AutoButtonColor = false; importBtn.Parent = avatarTab
+Instance.new("UICorner", importBtn).CornerRadius = UDim.new(0, 8)
+
+local logBg = Instance.new("Frame")
+logBg.Size = UDim2.new(1, -30, 0, 60); logBg.Position = UDim2.new(0, 15, 0, 100)
+logBg.BackgroundColor3 = Color3.fromRGB(12, 12, 16); logBg.BorderSizePixel = 0; logBg.Parent = avatarTab
+Instance.new("UICorner", logBg).CornerRadius = UDim.new(0, 8)
+
+local logLabel = Instance.new("TextLabel")
+logLabel.Size = UDim2.new(1, -10, 1, -10); logLabel.Position = UDim2.new(0, 5, 0, 5)
+logLabel.BackgroundTransparency = 1; logLabel.TextColor3 = Theme.Sub
+logLabel.Font = Enum.Font.Code; logLabel.TextSize = 11; logLabel.TextWrapped = true
+logLabel.TextXAlignment = Enum.TextXAlignment.Left; logLabel.TextYAlignment = Enum.TextYAlignment.Top
+logLabel.Text = "Sẵn sàng..."; logLabel.Parent = logBg; _G.LogLabel = logLabel
+
+local avatarScroll = Instance.new("ScrollingFrame")
+avatarScroll.Size = UDim2.new(1, -30, 0, 220); avatarScroll.Position = UDim2.new(0, 15, 0, 170)
+avatarScroll.BackgroundColor3 = Theme.Panel; avatarScroll.BorderSizePixel = 0; avatarScroll.ScrollBarThickness = 6
+avatarScroll.CanvasSize = UDim2.new(0, 0, 0, 0); avatarScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+avatarScroll.Parent = avatarTab; Instance.new("UICorner", avatarScroll).CornerRadius = UDim.new(0, 8)
+local avLayout = Instance.new("UIListLayout"); avLayout.Padding = UDim.new(0, 6); avLayout.Parent = avatarScroll
+Instance.new("UIPadding", avatarScroll).PaddingTop = UDim.new(0, 6)
+
+-- ═══════════════════════════════════════════════════════
+-- MOOD TAB
+-- ═══════════════════════════════════════════════════════
+moodTab = Instance.new("Frame")
+moodTab.Size = UDim2.new(1, 0, 1, -90); moodTab.Position = UDim2.new(0, 0, 0, 90)
+moodTab.BackgroundTransparency = 1; moodTab.Visible = false; moodTab.Parent = mainFrame
+
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(0, 300, 0, 32); searchBox.Position = UDim2.new(0, 15, 0, 0)
+searchBox.BackgroundColor3 = Theme.Item; searchBox.TextColor3 = Color3.new(1,1,1)
+searchBox.Text = ""; searchBox.PlaceholderText = "🔍 Tìm mood..."
+searchBox.PlaceholderColor3 = Theme.Sub; searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 13; searchBox.ClearTextOnFocus = false; searchBox.Parent = moodTab
+Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 8)
+
+local addMoodBtn = Instance.new("TextButton")
+addMoodBtn.Size = UDim2.new(0, 130, 0, 32); addMoodBtn.Position = UDim2.new(0, 325, 0, 0)
+addMoodBtn.BackgroundColor3 = Theme.Success; addMoodBtn.Text = "+ THÊM MOOD"
+addMoodBtn.TextColor3 = Color3.new(1,1,1); addMoodBtn.Font = Enum.Font.GothamBold
+addMoodBtn.TextSize = 12; addMoodBtn.AutoButtonColor = false; addMoodBtn.Parent = moodTab
+Instance.new("UICorner", addMoodBtn).CornerRadius = UDim.new(0, 8)
+
+local settingsBox = Instance.new("Frame")
+settingsBox.Size = UDim2.new(0, 170, 0, 400); settingsBox.Position = UDim2.new(1, -185, 0, 40)
+settingsBox.BackgroundColor3 = Theme.Panel; settingsBox.BorderSizePixel = 0; settingsBox.Parent = moodTab
+Instance.new("UICorner", settingsBox).CornerRadius = UDim.new(0, 8)
+
+local function makeSlider(parent, label, y, min, max, def, cb)
+	local t = Instance.new("TextLabel")
+	t.Size = UDim2.new(1, -16, 0, 14); t.Position = UDim2.new(0, 8, 0, y)
+	t.BackgroundTransparency = 1; t.Text = label; t.TextColor3 = Theme.Sub
+	t.Font = Enum.Font.GothamSemibold; t.TextSize = 11; t.TextXAlignment = Enum.TextXAlignment.Left; t.Parent = parent
+	local bg = Instance.new("TextButton")
+	bg.Size = UDim2.new(1, -16, 0, 12); bg.Position = UDim2.new(0, 8, 0, y + 16)
+	bg.BackgroundColor3 = Theme.Item; bg.BorderSizePixel = 0; bg.Text = ""; bg.AutoButtonColor = false; bg.Parent = parent
+	Instance.new("UICorner", bg).CornerRadius = UDim.new(0, 6)
+	local fill = Instance.new("Frame")
+	fill.Size = UDim2.new((def - min) / (max - min), 0, 1, 0); fill.BackgroundColor3 = Theme.Accent1
+	fill.BorderSizePixel = 0; fill.Parent = bg; Instance.new("UICorner", fill).CornerRadius = UDim.new(0, 6)
+	local val = Instance.new("TextLabel")
+	val.Size = UDim2.new(1, -16, 0, 14); val.Position = UDim2.new(0, 8, 0, y + 30)
+	val.BackgroundTransparency = 1; val.Text = string.format("%.2f", def); val.TextColor3 = Theme.Accent1
+	val.Font = Enum.Font.GothamBold; val.TextSize = 12; val.Parent = parent
+	local dragging = false
+	local function setFromX(x)
+		local s = math.clamp((x - bg.AbsolutePosition.X) / bg.AbsoluteSize.X, 0, 1)
+		local v = math.floor((min + s * (max - min)) * 100) / 100
+		fill.Size = UDim2.new(s, 0, 1, 0); val.Text = string.format("%.2f", v); cb(v)
+	end
+	bg.InputBegan:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = true; setFromX(i.Position.X) end end)
+	UserInputService.InputChanged:Connect(function(i) if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then setFromX(i.Position.X) end end)
+	UserInputService.InputEnded:Connect(function(i) if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end end)
+end
+
+local sTitle = Instance.new("TextLabel")
+sTitle.Size = UDim2.new(1, -16, 0, 20); sTitle.Position = UDim2.new(0, 8, 0, 8)
+sTitle.BackgroundTransparency = 1; sTitle.Text = "⚙ CÀI ĐẶT MOOD"; sTitle.TextColor3 = Theme.Text
+sTitle.Font = Enum.Font.GothamBold; sTitle.TextSize = 12; sTitle.Parent = settingsBox
+
+makeSlider(settingsBox, "Weight", 36, 0.1, 1, moodState.cfg.weight, function(v) moodState.cfg.weight = v; refreshMood() end)
+makeSlider(settingsBox, "Speed", 90, 0.1, 3, moodState.cfg.speed, function(v) moodState.cfg.speed = v; refreshMood() end)
+
+local loopBtn = Instance.new("TextButton")
+loopBtn.Size = UDim2.new(0, 50, 0, 24); loopBtn.Position = UDim2.new(1, -58, 0, 148)
+loopBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 70); loopBtn.Text = "OFF"; loopBtn.TextColor3 = Color3.new(1,1,1)
+loopBtn.Font = Enum.Font.GothamBold; loopBtn.TextSize = 11; loopBtn.AutoButtonColor = false; loopBtn.Parent = settingsBox
+Instance.new("UICorner", loopBtn).CornerRadius = UDim.new(0, 6)
+loopBtn.MouseButton1Click:Connect(function()
+	moodState.cfg.looped = not moodState.cfg.looped
+	loopBtn.Text = moodState.cfg.looped and "ON" or "OFF"
+	loopBtn.BackgroundColor3 = moodState.cfg.looped and Theme.Accent1 or Color3.fromRGB(70, 70, 70); refreshMood()
+end)
+
+local stopBtn = Instance.new("TextButton")
+stopBtn.Size = UDim2.new(1, -16, 0, 30); stopBtn.Position = UDim2.new(0, 8, 0, 230)
+stopBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 100); stopBtn.Text = "⏹ DỪNG MOOD"
+stopBtn.TextColor3 = Color3.new(1,1,1); stopBtn.Font = Enum.Font.GothamBold
+stopBtn.TextSize = 11; stopBtn.AutoButtonColor = false; stopBtn.Parent = settingsBox
+Instance.new("UICorner", stopBtn).CornerRadius = UDim.new(0, 6)
+stopBtn.MouseButton1Click:Connect(function() stopMood(); log("Đã dừng mood") end)
+
+local curMoodLbl = Instance.new("TextLabel")
+curMoodLbl.Size = UDim2.new(1, -16, 0, 40); curMoodLbl.Position = UDim2.new(0, 8, 0, 280)
+curMoodLbl.BackgroundColor3 = Theme.Item; curMoodLbl.Text = "▶ Đang phát:\n(trống)"
+curMoodLbl.TextColor3 = Theme.Text; curMoodLbl.Font = Enum.Font.Gotham
+curMoodLbl.TextSize = 11; curMoodLbl.TextWrapped = true; curMoodLbl.Parent = settingsBox
+Instance.new("UICorner", curMoodLbl).CornerRadius = UDim.new(0, 6)
+
+local moodScroll = Instance.new("ScrollingFrame")
+moodScroll.Size = UDim2.new(0, 400, 0, 400); moodScroll.Position = UDim2.new(0, 15, 0, 40)
+moodScroll.BackgroundColor3 = Theme.Panel; moodScroll.BorderSizePixel = 0; moodScroll.ScrollBarThickness = 6
+moodScroll.CanvasSize = UDim2.new(0, 0, 0, 0); moodScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+moodScroll.Parent = moodTab; Instance.new("UICorner", moodScroll).CornerRadius = UDim.new(0, 8)
+local moodGrid = Instance.new("UIGridLayout")
+moodGrid.CellSize = UDim2.new(0, 88, 0, 82); moodGrid.CellPadding = UDim2.new(0, 6, 0, 6)
+moodGrid.Parent = moodScroll; Instance.new("UIPadding", moodScroll).PaddingTop = UDim.new(0, 6)
+
+-- ═══════════════════════════════════════════════════════
+-- FACE TAB
+-- ═══════════════════════════════════════════════════════
+faceTab = Instance.new("Frame")
+faceTab.Size = UDim2.new(1, 0, 1, -90); faceTab.Position = UDim2.new(0, 0, 0, 90)
+faceTab.BackgroundTransparency = 1; faceTab.Visible = false; faceTab.Parent = mainFrame
+
+local epicFaceBtn = Instance.new("TextButton")
+epicFaceBtn.Size = UDim2.new(0, 220, 0, 32); epicFaceBtn.Position = UDim2.new(0, 15, 0, 0)
+epicFaceBtn.BackgroundColor3 = Theme.Accent2; epicFaceBtn.Text = "🔥 EPIC DYNAMIC HEAD"
+epicFaceBtn.TextColor3 = Color3.new(1,1,1); epicFaceBtn.Font = Enum.Font.GothamBold
+epicFaceBtn.TextSize = 12; epicFaceBtn.AutoButtonColor = false; epicFaceBtn.Parent = faceTab
+Instance.new("UICorner", epicFaceBtn).CornerRadius = UDim.new(0, 8)
+epicFaceBtn.MouseButton1Click:Connect(function()
+	if player.Character then
+		epicFaceBtn.Text = "⏳ Đang thay..."
+		task.spawn(function() changeToEpicHead(player.Character); epicFaceBtn.Text = "🔥 EPIC DYNAMIC HEAD" end)
+	end
+end)
+
+local addFaceBtn = Instance.new("TextButton")
+addFaceBtn.Size = UDim2.new(0, 130, 0, 32); addFaceBtn.Position = UDim2.new(0, 245, 0, 0)
+addFaceBtn.BackgroundColor3 = Theme.Success; addFaceBtn.Text = "+ THÊM FACE"
+addFaceBtn.TextColor3 = Color3.new(1,1,1); addFaceBtn.Font = Enum.Font.GothamBold
+addFaceBtn.TextSize = 12; addFaceBtn.AutoButtonColor = false; addFaceBtn.Parent = faceTab
+Instance.new("UICorner", addFaceBtn).CornerRadius = UDim.new(0, 8)
+
+local faceScroll = Instance.new("ScrollingFrame")
+faceScroll.Size = UDim2.new(1, -30, 0, 400); faceScroll.Position = UDim2.new(0, 15, 0, 40)
+faceScroll.BackgroundColor3 = Theme.Panel; faceScroll.BorderSizePixel = 0; faceScroll.ScrollBarThickness = 6
+faceScroll.CanvasSize = UDim2.new(0, 0, 0, 0); faceScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+faceScroll.Parent = faceTab; Instance.new("UICorner", faceScroll).CornerRadius = UDim.new(0, 8)
+local faceGrid = Instance.new("UIGridLayout")
+faceGrid.CellSize = UDim2.new(0, 88, 0, 82); faceGrid.CellPadding = UDim2.new(0, 6, 0, 6)
+faceGrid.Parent = faceScroll; Instance.new("UIPadding", faceScroll).PaddingTop = UDim.new(0, 6)
+
+-- ═══════════════════════════════════════════════════════
+-- EMOTE TAB
+-- ═══════════════════════════════════════════════════════
+emoteTab = Instance.new("Frame")
+emoteTab.Size = UDim2.new(1, 0, 1, -90); emoteTab.Position = UDim2.new(0, 0, 0, 90)
+emoteTab.BackgroundTransparency = 1; emoteTab.Visible = false; emoteTab.Parent = mainFrame
+
+local emoteSearchBox = Instance.new("TextBox")
+emoteSearchBox.Size = UDim2.new(0, 300, 0, 32); emoteSearchBox.Position = UDim2.new(0, 15, 0, 0)
+emoteSearchBox.BackgroundColor3 = Theme.Item; emoteSearchBox.TextColor3 = Color3.new(1,1,1)
+emoteSearchBox.Text = ""; emoteSearchBox.PlaceholderText = "🔍 Tìm emote..."
+emoteSearchBox.PlaceholderColor3 = Theme.Sub; emoteSearchBox.Font = Enum.Font.Gotham
+emoteSearchBox.TextSize = 13; emoteSearchBox.ClearTextOnFocus = false; emoteSearchBox.Parent = emoteTab
+Instance.new("UICorner", emoteSearchBox).CornerRadius = UDim.new(0, 8)
+
+local searchEmoteBtn = Instance.new("TextButton")
+searchEmoteBtn.Size = UDim2.new(0, 130, 0, 32); searchEmoteBtn.Position = UDim2.new(0, 325, 0, 0)
+searchEmoteBtn.BackgroundColor3 = Theme.Accent1; searchEmoteBtn.Text = "🔍 TÌM EMOTE"
+searchEmoteBtn.TextColor3 = Color3.new(1,1,1); searchEmoteBtn.Font = Enum.Font.GothamBold
+searchEmoteBtn.TextSize = 12; searchEmoteBtn.AutoButtonColor = false; searchEmoteBtn.Parent = emoteTab
+Instance.new("UICorner", searchEmoteBtn).CornerRadius = UDim.new(0, 8)
+
+local emoteScroll = Instance.new("ScrollingFrame")
+emoteScroll.Size = UDim2.new(1, -30, 0, 400); emoteScroll.Position = UDim2.new(0, 15, 0, 40)
+emoteScroll.BackgroundColor3 = Theme.Panel; emoteScroll.BorderSizePixel = 0; emoteScroll.ScrollBarThickness = 6
+emoteScroll.CanvasSize = UDim2.new(0, 0, 0, 0); emoteScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+emoteScroll.Parent = emoteTab; Instance.new("UICorner", emoteScroll).CornerRadius = UDim.new(0, 8)
+local emoteGrid = Instance.new("UIGridLayout")
+emoteGrid.CellSize = UDim2.new(0, 88, 0, 82); emoteGrid.CellPadding = UDim2.new(0, 6, 0, 6)
+emoteGrid.Parent = emoteScroll; Instance.new("UIPadding", emoteScroll).PaddingTop = UDim.new(0, 6)
+emoteScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+emoteGrid:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	emoteScroll.CanvasSize = UDim2.new(0, 0, 0, emoteGrid.AbsoluteContentSize.Y + 20)
+end)
+
+-- ═══════════════════════════════════════════════════════
+-- ANIMATION TAB
+-- ═══════════════════════════════════════════════════════
+animTab = Instance.new("Frame")
+animTab.Size = UDim2.new(1, 0, 1, -90); animTab.Position = UDim2.new(0, 0, 0, 90)
+animTab.BackgroundTransparency = 1; animTab.Visible = false; animTab.Parent = mainFrame
+
+local animSearchBox = Instance.new("TextBox")
+animSearchBox.Size = UDim2.new(0, 300, 0, 32); animSearchBox.Position = UDim2.new(0, 15, 0, 0)
+animSearchBox.BackgroundColor3 = Theme.Item; animSearchBox.TextColor3 = Color3.new(1,1,1)
+animSearchBox.Text = ""; animSearchBox.PlaceholderText = "🔍 Tìm animation bundle (R15)..."
+animSearchBox.PlaceholderColor3 = Theme.Sub; animSearchBox.Font = Enum.Font.Gotham
+animSearchBox.TextSize = 13; animSearchBox.ClearTextOnFocus = false; animSearchBox.Parent = animTab
+Instance.new("UICorner", animSearchBox).CornerRadius = UDim.new(0, 8)
+
+local searchAnimBtn = Instance.new("TextButton")
+searchAnimBtn.Size = UDim2.new(0, 130, 0, 32); searchAnimBtn.Position = UDim2.new(0, 325, 0, 0)
+searchAnimBtn.BackgroundColor3 = Theme.Accent3; searchAnimBtn.Text = "🔍 TÌM ANIMATION"
+searchAnimBtn.TextColor3 = Color3.new(1,1,1); searchAnimBtn.Font = Enum.Font.GothamBold
+searchAnimBtn.TextSize = 12; searchAnimBtn.AutoButtonColor = false; searchAnimBtn.Parent = animTab
+Instance.new("UICorner", searchAnimBtn).CornerRadius = UDim.new(0, 8)
+
+local animScroll = Instance.new("ScrollingFrame")
+animScroll.Size = UDim2.new(1, -30, 0, 400); animScroll.Position = UDim2.new(0, 15, 0, 40)
+animScroll.BackgroundColor3 = Theme.Panel; animScroll.BorderSizePixel = 0; animScroll.ScrollBarThickness = 6
+animScroll.CanvasSize = UDim2.new(0, 0, 0, 0); animScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+animScroll.Parent = animTab; Instance.new("UICorner", animScroll).CornerRadius = UDim.new(0, 8)
+local animGrid = Instance.new("UIGridLayout")
+animGrid.CellSize = UDim2.new(0, 110, 0, 100); animGrid.CellPadding = UDim2.new(0, 6, 0, 6)
+animGrid.Parent = animScroll; Instance.new("UIPadding", animScroll).PaddingTop = UDim.new(0, 6)
+animScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+animGrid:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+	animScroll.CanvasSize = UDim2.new(0, 0, 0, animGrid.AbsoluteContentSize.Y + 20)
+end)
+
+-- ═══════════════════════════════════════════════════════
+-- SCRIPTS TAB (SCRIPTBLOX API)
+-- ═══════════════════════════════════════════════════════
+scriptTab = Instance.new("Frame")
+scriptTab.Size = UDim2.new(1, 0, 1, -90); scriptTab.Position = UDim2.new(0, 0, 0, 90)
+scriptTab.BackgroundTransparency = 1; scriptTab.Visible = false; scriptTab.Parent = mainFrame
+
+local scriptSearchBox = Instance.new("TextBox")
+scriptSearchBox.Size = UDim2.new(0, 360, 0, 32); scriptSearchBox.Position = UDim2.new(0, 15, 0, 0)
+scriptSearchBox.BackgroundColor3 = Theme.Item; scriptSearchBox.TextColor3 = Color3.new(1,1,1)
+scriptSearchBox.Text = ""; scriptSearchBox.PlaceholderText = "🔍 Tìm script trên ScriptBlox (vd: blox fruits, fly)..."
+scriptSearchBox.PlaceholderColor3 = Theme.Sub; scriptSearchBox.Font = Enum.Font.Gotham
+scriptSearchBox.TextSize = 13; scriptSearchBox.ClearTextOnFocus = false; scriptSearchBox.Parent = scriptTab
+Instance.new("UICorner", scriptSearchBox).CornerRadius = UDim.new(0, 8)
+
+local searchScriptBtn = Instance.new("TextButton")
+searchScriptBtn.Size = UDim2.new(0, 130, 0, 32); searchScriptBtn.Position = UDim2.new(0, 385, 0, 0)
+searchScriptBtn.BackgroundColor3 = Theme.Accent1; searchScriptBtn.Text = "🔍 TÌM SCRIPT"
+searchScriptBtn.TextColor3 = Color3.new(1,1,1); searchScriptBtn.Font = Enum.Font.GothamBold
+searchScriptBtn.TextSize = 12; searchScriptBtn.AutoButtonColor = false; searchScriptBtn.Parent = scriptTab
+Instance.new("UICorner", searchScriptBtn).CornerRadius = UDim.new(0, 8)
+
+local scriptStatusLbl = Instance.new("TextLabel")
+scriptStatusLbl.Size = UDim2.new(0, 145, 0, 32); scriptStatusLbl.Position = UDim2.new(0, 522, 0, 0)
+scriptStatusLbl.BackgroundTransparency = 1; scriptStatusLbl.Text = "Sẵn sàng"
+scriptStatusLbl.TextColor3 = Theme.Sub; scriptStatusLbl.Font = Enum.Font.GothamSemibold
+scriptStatusLbl.TextSize = 11; scriptStatusLbl.TextXAlignment = Enum.TextXAlignment.Left; scriptStatusLbl.Parent = scriptTab
+
+local scriptScroll = Instance.new("ScrollingFrame")
+scriptScroll.Size = UDim2.new(1, -30, 0, 400); scriptScroll.Position = UDim2.new(0, 15, 0, 40)
+scriptScroll.BackgroundColor3 = Theme.Panel; scriptScroll.BorderSizePixel = 0; scriptScroll.ScrollBarThickness = 6
+scriptScroll.CanvasSize = UDim2.new(0, 0, 0, 0); scriptScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scriptScroll.Parent = scriptTab; Instance.new("UICorner", scriptScroll).CornerRadius = UDim.new(0, 8)
+
+local scriptLayout = Instance.new("UIListLayout")
+scriptLayout.Padding = UDim.new(0, 8); scriptLayout.Parent = scriptScroll
+local scriptPad = Instance.new("UIPadding", scriptScroll)
+scriptPad.PaddingTop = UDim.new(0, 8); scriptPad.PaddingLeft = UDim.new(0, 8); scriptPad.PaddingRight = UDim.new(0, 8)
+
+local function clearScriptResults()
+	for _, v in ipairs(scriptScroll:GetChildren()) do
+		if v:IsA("Frame") then v:Destroy() end
+	end
+end
+
+local function runRawScript(codeStr, titleStr)
+	if not codeStr or codeStr == "" then
+		log("❌ Script rỗng, không thể chạy")
+		return
+	end
+	local fn, compErr = loadstring(codeStr)
+	if not fn then
+		log("❌ Lỗi cú pháp script (" .. titleStr .. "): " .. tostring(compErr))
+		return
+	end
+	log("▶ Đang chạy script: " .. titleStr)
+	task.spawn(function()
+		local ok, runErr = pcall(fn)
+		if not ok then
+			log("❌ Lỗi khi thực thi (" .. titleStr .. "): " .. tostring(runErr))
+		else
+			log("✅ Đã chạy xong: " .. titleStr)
+		end
+	end)
+end
+
+local function addScriptCard(item)
+	local titleStr = item.title or "Untitled Script"
+	local gameName = (item.game and item.game.name) or "Universal / Unknown"
+	local rawCode = item.script or ""
+	local isVerified = item.verified == true
+	local isUniversal = item.isUniversal == true
+	local hasKey = item.key == true
+
+	local card = Instance.new("Frame")
+	card.Size = UDim2.new(1, -6, 0, 64)
+	card.BackgroundColor3 = Theme.Item; card.BorderSizePixel = 0; card.Parent = scriptScroll
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+
+	local tLbl = Instance.new("TextLabel")
+	tLbl.Size = UDim2.new(1, -165, 0, 22); tLbl.Position = UDim2.new(0, 10, 0, 6)
+	tLbl.BackgroundTransparency = 1; tLbl.Text = titleStr
+	tLbl.TextColor3 = Theme.Text; tLbl.Font = Enum.Font.GothamBold
+	tLbl.TextSize = 13; tLbl.TextXAlignment = Enum.TextXAlignment.Left; tLbl.TextTruncate = Enum.TextTruncate.AtEnd
+	tLbl.Parent = card
+
+	local metaParts = { "🎮 " .. gameName }
+	if isVerified then table.insert(metaParts, "✔ Verified") end
+	if isUniversal then table.insert(metaParts, "🌐 Universal") end
+	if hasKey then table.insert(metaParts, "🔑 Key") end
+
+	local gLbl = Instance.new("TextLabel")
+	gLbl.Size = UDim2.new(1, -165, 0, 18); gLbl.Position = UDim2.new(0, 10, 0, 32)
+	gLbl.BackgroundTransparency = 1; gLbl.Text = table.concat(metaParts, "  •  ")
+	gLbl.TextColor3 = isVerified and Theme.Success or Theme.Sub
+	gLbl.Font = Enum.Font.Gotham; gLbl.TextSize = 11
+	gLbl.TextXAlignment = Enum.TextXAlignment.Left; gLbl.TextTruncate = Enum.TextTruncate.AtEnd
+	gLbl.Parent = card
+
+	local copyBtn = Instance.new("TextButton")
+	copyBtn.Size = UDim2.new(0, 68, 0, 34); copyBtn.Position = UDim2.new(1, -152, 0.5, -17)
+	copyBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 72); copyBtn.Text = "📋 COPY"
+	copyBtn.TextColor3 = Color3.new(1,1,1); copyBtn.Font = Enum.Font.GothamBold
+	copyBtn.TextSize = 11; copyBtn.AutoButtonColor = false; copyBtn.Parent = card
+	Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 6)
+
+	copyBtn.MouseButton1Click:Connect(function()
+		if rawCode == "" then
+			copyBtn.Text = "NO CODE"
+			task.delay(1.2, function() if copyBtn.Parent then copyBtn.Text = "📋 COPY" end end)
+			return
+		end
+		if setclipboard then
+			pcall(setclipboard, rawCode)
+			copyBtn.Text = "✓ COPIED"
+			copyBtn.BackgroundColor3 = Theme.Success
+			log("📋 Đã copy script: " .. titleStr)
+		else
+			copyBtn.Text = "NO CLIP"
+		end
+		task.delay(1.5, function()
+			if copyBtn.Parent then
+				copyBtn.Text = "📋 COPY"
+				copyBtn.BackgroundColor3 = Color3.fromRGB(55, 55, 72)
+			end
+		end)
+	end)
+
+	local runBtn = Instance.new("TextButton")
+	runBtn.Size = UDim2.new(0, 68, 0, 34); runBtn.Position = UDim2.new(1, -78, 0.5, -17)
+	runBtn.BackgroundColor3 = Theme.Success; runBtn.Text = "▶ RUN"
+	runBtn.TextColor3 = Color3.new(1,1,1); runBtn.Font = Enum.Font.GothamBold
+	runBtn.TextSize = 11; runBtn.AutoButtonColor = false; runBtn.Parent = card
+	Instance.new("UICorner", runBtn).CornerRadius = UDim.new(0, 6)
+
+	runBtn.MouseButton1Click:Connect(function()
+		runRawScript(rawCode, titleStr)
+	end)
+end
+
+local function searchScriptBlox(keyword)
+	clearScriptResults()
+	local q = (keyword or ""):gsub("^%s+", ""):gsub("%s+$", "")
+	if q == "" then
+		scriptStatusLbl.Text = "Nhập từ khóa"
+		return
+	end
+
+	scriptStatusLbl.Text = "⏳ Đang tìm..."
+	log("🔍 ScriptBlox tìm kiếm: " .. q)
+
+	local url = "https://scriptblox.com/api/script/search?q=" .. HttpService:UrlEncode(q) .. "&page=1&max=20"
+
+	task.spawn(function()
+		local ok, decoded = httpGetJson(url)
+		if not ok or not decoded then
+			scriptStatusLbl.Text = "Lỗi API"
+			log("❌ Không lấy được dữ liệu từ ScriptBlox API")
+			return
+		end
+
+		local scripts = (decoded.result and decoded.result.scripts) or decoded.scripts or {}
+		if #scripts == 0 then
+			scriptStatusLbl.Text = "0 kết quả"
+			log("⚠️ Không tìm thấy script nào cho: " .. q)
+			return
+		end
+
+		for _, item in ipairs(scripts) do
+			addScriptCard(item)
+		end
+
+		scriptStatusLbl.Text = #scripts .. " kết quả"
+		log("✅ Tìm thấy " .. #scripts .. " script cho: " .. q)
+	end)
+end
+
+searchScriptBtn.MouseButton1Click:Connect(function() searchScriptBlox(scriptSearchBox.Text) end)
+scriptSearchBox.FocusLost:Connect(function(enterPressed)
+	if enterPressed then searchScriptBlox(scriptSearchBox.Text) end
+end)
+
+-- ═══════════════════════════════════════════════════════
+-- MOOD CARDS
+-- ═══════════════════════════════════════════════════════
+local moodBtns = {}
+local function addMoodCard(m)
+	local btn = Instance.new("ImageButton")
+	btn.BackgroundColor3 = Theme.Item; btn.BorderSizePixel = 0
+	btn.Image = "rbxthumb://type=Asset&id=" .. m.id .. "&w=420&h=420"
+	btn.ScaleType = Enum.ScaleType.Crop; btn.Parent = moodScroll
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+	local nl = Instance.new("TextLabel")
+	nl.Size = UDim2.new(1, 0, 0, 16); nl.Position = UDim2.new(0, 0, 1, -16)
+	nl.BackgroundColor3 = Color3.new(0,0,0); nl.BackgroundTransparency = 0.4
+	nl.Text = m.name or tostring(m.id):sub(-4); nl.TextColor3 = Color3.new(1,1,1)
+	nl.Font = Enum.Font.GothamBold; nl.TextSize = 9; nl.TextScaled = true; nl.Parent = btn
+	if m.faceId then
+		local fBadge = Instance.new("TextLabel")
+		fBadge.Size = UDim2.new(0, 32, 0, 14); fBadge.Position = UDim2.new(0, 2, 1, -32)
+		fBadge.BackgroundColor3 = Theme.Accent2; fBadge.BackgroundTransparency = 0.2
+		fBadge.Text = "😀 " .. tostring(m.faceId):sub(-3); fBadge.TextColor3 = Color3.new(1,1,1)
+		fBadge.Font = Enum.Font.GothamBold; fBadge.TextSize = 8; fBadge.ZIndex = 3; fBadge.Parent = btn
+		Instance.new("UICorner", fBadge).CornerRadius = UDim.new(0, 3)
+	end
+	if not m.name then
+		task.spawn(function()
+			local ok, r = pcall(function() return MarketplaceService:GetProductInfo(m.id) end)
+			if ok and r then nl.Text = r.Name; m.name = r.Name; saveMoods() end
+		end)
+	end
+	btn.MouseEnter:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Accent1}):Play() end)
+	btn.MouseLeave:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Item}):Play() end)
+	btn.MouseButton1Click:Connect(function() playMood(m.id, m.name, m.faceId); curMoodLbl.Text = "▶ Đang phát:\n" .. (m.name or tostring(m.id)) end)
+	local del = Instance.new("TextButton")
+	del.Size = UDim2.new(0, 16, 0, 16); del.Position = UDim2.new(0, 2, 0, 2)
+	del.BackgroundColor3 = Theme.Danger; del.BackgroundTransparency = 0.3; del.Text = "X"
+	del.TextColor3 = Color3.new(1,1,1); del.Font = Enum.Font.GothamBold; del.TextSize = 9; del.Parent = btn
+	Instance.new("UICorner", del).CornerRadius = UDim.new(0, 3)
+	del.MouseButton1Click:Connect(function()
+		for i, mm in ipairs(moods) do if mm.id == m.id then table.remove(moods, i) break end end
+		for i, b in ipairs(moodBtns) do if b == btn then table.remove(moodBtns, i) break end end
+		btn:Destroy(); saveMoods(); log("Đã xoá mood: " .. (m.name or m.id))
+	end)
+	table.insert(moodBtns, btn)
+end
+for _, m in ipairs(moods) do addMoodCard(m) end
+
+-- ═══════════════════════════════════════════════════════
+-- FACE CARDS
+-- ═══════════════════════════════════════════════════════
+local faceBtns = {}
+local function addFaceCard(f)
+	local btn = Instance.new("ImageButton")
+	btn.BackgroundColor3 = Theme.Item; btn.BorderSizePixel = 0
+	btn.Image = "rbxthumb://type=Asset&id=" .. f.id .. "&w=420&h=420"
+	btn.ScaleType = Enum.ScaleType.Crop; btn.Parent = faceScroll
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+	local nl = Instance.new("TextLabel")
+	nl.Size = UDim2.new(1, 0, 0, 16); nl.Position = UDim2.new(0, 0, 1, -16)
+	nl.BackgroundColor3 = Color3.new(0,0,0); nl.BackgroundTransparency = 0.4
+	nl.Text = f.name or tostring(f.id):sub(-4); nl.TextColor3 = Color3.new(1,1,1)
+	nl.Font = Enum.Font.GothamBold; nl.TextSize = 9; nl.TextScaled = true; nl.Parent = btn
+	btn.MouseEnter:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Accent1}):Play() end)
+	btn.MouseLeave:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Item}):Play() end)
+	btn.MouseButton1Click:Connect(function()
+		local char = player.Character; local head = char:FindFirstChild("Head")
+		for _, p in ipairs(char:GetChildren()) do if p.Name == "Head" and p.Transparency == 0 then head = p end end
+		applyCustomFace(head, f.id); log("Đã áp Face ID: " .. f.id)
+	end)
+	local del = Instance.new("TextButton")
+	del.Size = UDim2.new(0, 16, 0, 16); del.Position = UDim2.new(0, 2, 0, 2)
+	del.BackgroundColor3 = Theme.Danger; del.BackgroundTransparency = 0.3; del.Text = "X"
+	del.TextColor3 = Color3.new(1,1,1); del.Font = Enum.Font.GothamBold; del.TextSize = 9; del.Parent = btn
+	Instance.new("UICorner", del).CornerRadius = UDim.new(0, 3)
+	del.MouseButton1Click:Connect(function()
+		for i, ff in ipairs(faces) do if ff.id == f.id then table.remove(faces, i) break end end
+		for i, b in ipairs(faceBtns) do if b == btn then table.remove(faceBtns, i) break end end
+		btn:Destroy(); saveFaces(); log("Đã xoá face: " .. (f.name or f.id))
+	end)
+	table.insert(faceBtns, btn)
+end
+for _, f in ipairs(faces) do addFaceCard(f) end
+
+-- ═══════════════════════════════════════════════════════
+-- EMOTE CARDS + SEARCH
+-- ═══════════════════════════════════════════════════════
+local function clearEmoteResults()
+	for _, v in ipairs(emoteScroll:GetChildren()) do if v:IsA("ImageButton") then v:Destroy() end end
+end
+local function addEmoteCard(e)
+	local btn = Instance.new("ImageButton")
+	btn.BackgroundColor3 = Theme.Item; btn.BorderSizePixel = 0
+	btn.Image = "rbxthumb://type=Asset&id=" .. e.id .. "&w=420&h=420"
+	btn.ScaleType = Enum.ScaleType.Crop; btn.Parent = emoteScroll
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+	local nl = Instance.new("TextLabel")
+	nl.Size = UDim2.new(1, 0, 0, 16); nl.Position = UDim2.new(0, 0, 1, -16)
+	nl.BackgroundColor3 = Color3.new(0,0,0); nl.BackgroundTransparency = 0.4
+	nl.Text = e.name or tostring(e.id); nl.TextColor3 = Color3.new(1,1,1)
+	nl.Font = Enum.Font.GothamBold; nl.TextSize = 9; nl.TextScaled = true; nl.Parent = btn
+	btn.MouseEnter:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Accent1}):Play() end)
+	btn.MouseLeave:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Item}):Play() end)
+	btn.MouseButton1Click:Connect(function() playEmote(e.id, e.name) end)
+end
+local function searchMarketEmotes(keyword)
+	clearEmoteResults(); if keyword == "" then return end
+	log("🔍 Đang tìm emote: " .. keyword)
+	local url = "https://catalog.roblox.com/v1/search/items/details?Category=12&Subcategory=39&Keyword="
+		.. HttpService:UrlEncode(keyword) .. "&Limit=30"
+	task.spawn(function()
+		local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+		if not httpRequest then log("❌ Executor không hỗ trợ HTTP request!"); return end
+		local ok, response = pcall(function() return httpRequest({ Url = url, Method = "GET" }) end)
+		if not (ok and response and response.Body) then log("❌ Lỗi mạng"); return end
+		local decodeOk, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
+		if not (decodeOk and data and data.data) then log("❌ Dữ liệu không hợp lệ"); return end
+		local count = 0
+		for _, item in ipairs(data.data) do
+			if item.id and (item.assetType == 61 or item.assetType == nil) then
+				addEmoteCard({ id = item.id, name = item.name or ("Emote " .. item.id) }); count += 1
+			end
+		end
+		log("✅ Đã thêm " .. count .. " emote")
+		task.defer(function() emoteScroll.CanvasSize = UDim2.new(0, 0, 0, emoteGrid.AbsoluteContentSize.Y + 20) end)
+	end)
+end
+searchEmoteBtn.MouseButton1Click:Connect(function() searchMarketEmotes(emoteSearchBox.Text) end)
+emoteSearchBox.FocusLost:Connect(function(enterPressed) if enterPressed then searchMarketEmotes(emoteSearchBox.Text) end end)
+
+-- ═══════════════════════════════════════════════════════
+-- ANIMATION SEARCH LOGIC
+-- ═══════════════════════════════════════════════════════
+local function clearAnimResults()
+	for _, v in ipairs(animScroll:GetChildren()) do if v:IsA("ImageButton") then v:Destroy() end end
+end
+
+local function addAnimCard(item)
+	local btn = Instance.new("ImageButton")
+	btn.BackgroundColor3 = Theme.Item; btn.BorderSizePixel = 0
+	btn.Image = "rbxthumb://type=Asset&id=" .. item.id .. "&w=420&h=420"
+	btn.ScaleType = Enum.ScaleType.Crop; btn.Parent = animScroll
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+	local nl = Instance.new("TextLabel")
+	nl.Size = UDim2.new(1, 0, 0, 20); nl.Position = UDim2.new(0, 0, 1, -20)
+	nl.BackgroundColor3 = Color3.new(0,0,0); nl.BackgroundTransparency = 0.4
+	nl.Text = item.name or tostring(item.id); nl.TextColor3 = Color3.new(1,1,1)
+	nl.Font = Enum.Font.GothamBold; nl.TextSize = 9; nl.TextScaled = true; nl.Parent = btn
+	btn.MouseEnter:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Accent3}):Play() end)
+	btn.MouseLeave:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Item}):Play() end)
+	btn.MouseButton1Click:Connect(function()
+		applyAnimationBundle(item.id, item.name)
+		if _G.LogLabel then _G.LogLabel.Text = "⏳ Đang áp animation: " .. item.name .. "\n" .. _G.LogLabel.Text end
+	end)
+end
+
+local function searchAnimations(keyword)
+	clearAnimResults()
+	if keyword == "" then return end
+	log("🔍 Đang tìm animation bundle: " .. keyword)
+
+	local url = "https://catalog.roblox.com/v1/search/items/details?Category=12&Subcategory=38&Keyword="
+		.. HttpService:UrlEncode(keyword) .. "&Limit=30"
+
+	task.spawn(function()
+		local httpRequest = request or http_request or (syn and syn.request) or (http and http.request)
+		if not httpRequest then log("❌ Executor không hỗ trợ HTTP request!"); return end
+		local ok, response = pcall(function() return httpRequest({ Url = url, Method = "GET" }) end)
+		if not (ok and response and response.Body) then log("❌ Lỗi mạng"); return end
+		local decodeOk, data = pcall(function() return HttpService:JSONDecode(response.Body) end)
+		if not (decodeOk and data and data.data) then log("❌ Dữ liệu không hợp lệ"); return end
+
+		local count = 0
+		for _, item in ipairs(data.data) do
+			if item.id and item.name then
+				addAnimCard({ id = item.id, name = item.name, assetType = item.assetType })
+				count += 1
+			end
+		end
+		log("✅ Đã thêm " .. count .. " animation bundle")
+		task.defer(function() animScroll.CanvasSize = UDim2.new(0, 0, 0, animGrid.AbsoluteContentSize.Y + 20) end)
+	end)
+end
+
+searchAnimBtn.MouseButton1Click:Connect(function() searchAnimations(animSearchBox.Text) end)
+animSearchBox.FocusLost:Connect(function(enterPressed) if enterPressed then searchAnimations(animSearchBox.Text) end end)
+
+-- ═══════════════════════════════════════════════════════
+-- DIALOGS, SHARE & AVATAR REFRESH
+-- ═══════════════════════════════════════════════════════
+local function makeDialog(w, h, titleText)
+	local ov = Instance.new("Frame")
+	ov.Size = UDim2.new(1, 0, 1, 0); ov.BackgroundColor3 = Color3.new(0,0,0)
+	ov.BackgroundTransparency = 0.5; ov.BorderSizePixel = 0; ov.ZIndex = 100; ov.Parent = gui
+	local d = Instance.new("Frame")
+	d.Size = UDim2.new(0, w, 0, h); d.Position = UDim2.new(0.5, -w/2, 0.5, -h/2)
+	d.BackgroundColor3 = Theme.Panel; d.BorderSizePixel = 0; d.ZIndex = 101; d.Parent = gui
+	Instance.new("UICorner", d).CornerRadius = UDim.new(0, 10)
+	local tt = Instance.new("TextLabel")
+	tt.Size = UDim2.new(1, -20, 0, 30); tt.Position = UDim2.new(0, 10, 0, 5)
+	tt.BackgroundTransparency = 1; tt.Text = titleText; tt.TextColor3 = Theme.Text
+	tt.Font = Enum.Font.GothamBold; tt.TextSize = 14; tt.ZIndex = 102; tt.Parent = d
+	return d, ov
+end
+
+local function openShareCodeDialog(codeText)
+	local d, ov = makeDialog(440, 210, "📤 MÃ CHIA SẺ AVATAR")
+	local box = Instance.new("TextBox")
+	box.Size = UDim2.new(1, -24, 0, 96); box.Position = UDim2.new(0, 12, 0, 44)
+	box.BackgroundColor3 = Theme.Item; box.TextColor3 = Theme.Text
+	box.Text = codeText; box.MultiLine = true; box.TextWrapped = true
+	box.ClearTextOnFocus = false; box.Font = Enum.Font.Code; box.TextSize = 11
+	box.ZIndex = 102; box.Parent = d
+	Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+
+	local copyBtn = Instance.new("TextButton")
+	copyBtn.Size = UDim2.new(0.45, 0, 0, 32); copyBtn.Position = UDim2.new(0.05, 0, 1, -44)
+	copyBtn.BackgroundColor3 = Theme.Success; copyBtn.Text = "📋 COPY MÃ"
+	copyBtn.TextColor3 = Color3.new(1,1,1); copyBtn.Font = Enum.Font.GothamBold
+	copyBtn.TextSize = 12; copyBtn.ZIndex = 102; copyBtn.Parent = d
+	Instance.new("UICorner", copyBtn).CornerRadius = UDim.new(0, 6)
+	copyBtn.MouseButton1Click:Connect(function()
+		if setclipboard then pcall(setclipboard, codeText) end
+		copyBtn.Text = "✓ ĐÃ COPY"
+		task.delay(1.2, function() if copyBtn.Parent then copyBtn.Text = "📋 COPY MÃ" end end)
+	end)
+
+	local closeD = Instance.new("TextButton")
+	closeD.Size = UDim2.new(0.45, 0, 0, 32); closeD.Position = UDim2.new(0.5, 0, 1, -44)
+	closeD.BackgroundColor3 = Color3.fromRGB(70, 70, 85); closeD.Text = "ĐÓNG"
+	closeD.TextColor3 = Color3.new(1,1,1); closeD.Font = Enum.Font.GothamBold
+	closeD.TextSize = 12; closeD.ZIndex = 102; closeD.Parent = d
+	Instance.new("UICorner", closeD).CornerRadius = UDim.new(0, 6)
+	closeD.MouseButton1Click:Connect(function() d:Destroy(); ov:Destroy() end)
+end
+
+addMoodBtn.MouseButton1Click:Connect(function()
+	local d, ov = makeDialog(300, 230, "+ THÊM MOOD MỚI")
+	local idIn = Instance.new("TextBox")
+	idIn.Size = UDim2.new(1, -20, 0, 32); idIn.Position = UDim2.new(0, 10, 0, 40)
+	idIn.BackgroundColor3 = Theme.Item; idIn.TextColor3 = Color3.new(1,1,1); idIn.Text = ""
+	idIn.PlaceholderText = "Mood Asset ID"; idIn.PlaceholderColor3 = Theme.Sub
+	idIn.Font = Enum.Font.Gotham; idIn.TextSize = 12; idIn.ClearTextOnFocus = false; idIn.ZIndex = 102; idIn.Parent = d
+	Instance.new("UICorner", idIn).CornerRadius = UDim.new(0, 6)
+	local nmIn = Instance.new("TextBox")
+	nmIn.Size = UDim2.new(1, -20, 0, 32); nmIn.Position = UDim2.new(0, 10, 0, 78)
+	nmIn.BackgroundColor3 = Theme.Item; nmIn.TextColor3 = Color3.new(1,1,1); nmIn.Text = ""
+	nmIn.PlaceholderText = "Tên mood (tùy chọn)"; nmIn.PlaceholderColor3 = Theme.Sub
+	nmIn.Font = Enum.Font.Gotham; nmIn.TextSize = 12; nmIn.ClearTextOnFocus = false; nmIn.ZIndex = 102; nmIn.Parent = d
+	Instance.new("UICorner", nmIn).CornerRadius = UDim.new(0, 6)
+	local faceIn = Instance.new("TextBox")
+	faceIn.Size = UDim2.new(1, -20, 0, 32); faceIn.Position = UDim2.new(0, 10, 0, 116)
+	faceIn.BackgroundColor3 = Theme.Item; faceIn.TextColor3 = Color3.new(1,1,1); faceIn.Text = ""
+	faceIn.PlaceholderText = "Face ID (tùy chọn)"; faceIn.PlaceholderColor3 = Theme.Sub
+	faceIn.Font = Enum.Font.Gotham; faceIn.TextSize = 12; faceIn.ClearTextOnFocus = false; faceIn.ZIndex = 102; faceIn.Parent = d
+	Instance.new("UICorner", faceIn).CornerRadius = UDim.new(0, 6)
+	local okBtn = Instance.new("TextButton")
+	okBtn.Size = UDim2.new(0.45, 0, 0, 30); okBtn.Position = UDim2.new(0.05, 0, 1, -40)
+	okBtn.BackgroundColor3 = Theme.Success; okBtn.Text = "THÊM"; okBtn.TextColor3 = Color3.new(1,1,1)
+	okBtn.Font = Enum.Font.GothamBold; okBtn.TextSize = 12; okBtn.ZIndex = 102; okBtn.Parent = d
+	Instance.new("UICorner", okBtn).CornerRadius = UDim.new(0, 6)
+	local noBtn = Instance.new("TextButton")
+	noBtn.Size = UDim2.new(0.45, 0, 0, 30); noBtn.Position = UDim2.new(0.5, 0, 1, -40)
+	noBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 70); noBtn.Text = "HUỶ"; noBtn.TextColor3 = Color3.new(1,1,1)
+	noBtn.Font = Enum.Font.GothamBold; noBtn.TextSize = 12; noBtn.ZIndex = 102; noBtn.Parent = d
+	Instance.new("UICorner", noBtn).CornerRadius = UDim.new(0, 6)
+	okBtn.MouseButton1Click:Connect(function()
+		local id = tonumber(idIn.Text); if not id then return end
+		for _, mm in ipairs(moods) do if mm.id == id then d:Destroy(); ov:Destroy(); return end end
+		local faceId = tonumber(faceIn.Text)
+		local entry = { id = id, name = (nmIn.Text ~= "" and nmIn.Text or nil), faceId = faceId, custom = true }
+		table.insert(moods, entry); addMoodCard(entry); saveMoods(); d:Destroy(); ov:Destroy()
+		log("Đã thêm mood: " .. (entry.name or id))
+	end)
+	noBtn.MouseButton1Click:Connect(function() d:Destroy(); ov:Destroy() end)
+end)
+
+addFaceBtn.MouseButton1Click:Connect(function()
+	local d, ov = makeDialog(300, 180, "+ THÊM FACE MỚI")
+	local idIn = Instance.new("TextBox")
+	idIn.Size = UDim2.new(1, -20, 0, 32); idIn.Position = UDim2.new(0, 10, 0, 40)
+	idIn.BackgroundColor3 = Theme.Item; idIn.TextColor3 = Color3.new(1,1,1); idIn.Text = ""
+	idIn.PlaceholderText = "Face Asset ID"; idIn.PlaceholderColor3 = Theme.Sub
+	idIn.Font = Enum.Font.Gotham; idIn.TextSize = 12; idIn.ClearTextOnFocus = false; idIn.ZIndex = 102; idIn.Parent = d
+	Instance.new("UICorner", idIn).CornerRadius = UDim.new(0, 6)
+	local nmIn = Instance.new("TextBox")
+	nmIn.Size = UDim2.new(1, -20, 0, 32); nmIn.Position = UDim2.new(0, 10, 0, 78)
+	nmIn.BackgroundColor3 = Theme.Item; nmIn.TextColor3 = Color3.new(1,1,1); nmIn.Text = ""
+	nmIn.PlaceholderText = "Tên face (tùy chọn)"; nmIn.PlaceholderColor3 = Theme.Sub
+	nmIn.Font = Enum.Font.Gotham; nmIn.TextSize = 12; nmIn.ClearTextOnFocus = false; nmIn.ZIndex = 102; nmIn.Parent = d
+	Instance.new("UICorner", nmIn).CornerRadius = UDim.new(0, 6)
+	local okBtn = Instance.new("TextButton")
+	okBtn.Size = UDim2.new(0.45, 0, 0, 30); okBtn.Position = UDim2.new(0.05, 0, 1, -40)
+	okBtn.BackgroundColor3 = Theme.Success; okBtn.Text = "THÊM"; okBtn.TextColor3 = Color3.new(1,1,1)
+	okBtn.Font = Enum.Font.GothamBold; okBtn.TextSize = 12; okBtn.ZIndex = 102; okBtn.Parent = d
+	Instance.new("UICorner", okBtn).CornerRadius = UDim.new(0, 6)
+	local noBtn = Instance.new("TextButton")
+	noBtn.Size = UDim2.new(0.45, 0, 0, 30); noBtn.Position = UDim2.new(0.5, 0, 1, -40)
+	noBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 70); noBtn.Text = "HUỶ"; noBtn.TextColor3 = Color3.new(1,1,1)
+	noBtn.Font = Enum.Font.GothamBold; noBtn.TextSize = 12; noBtn.ZIndex = 102; noBtn.Parent = d
+	Instance.new("UICorner", noBtn).CornerRadius = UDim.new(0, 6)
+	okBtn.MouseButton1Click:Connect(function()
+		local id = tonumber(idIn.Text); if not id then return end
+		for _, ff in ipairs(faces) do if ff.id == id then d:Destroy(); ov:Destroy(); return end end
+		local entry = { id = id, name = (nmIn.Text ~= "" and nmIn.Text or nil), custom = true }
+		table.insert(faces, entry); addFaceCard(entry); saveFaces(); d:Destroy(); ov:Destroy()
+		log("Đã thêm face: " .. (entry.name or id))
+	end)
+	noBtn.MouseButton1Click:Connect(function() d:Destroy(); ov:Destroy() end)
+end)
+
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+	local s = searchBox.Text:lower()
+	for i, b in ipairs(moodBtns) do
+		local m = moods[i]
+		if m then b.Visible = s == "" or (m.name or ""):lower():find(s, 1, true) ~= nil or tostring(m.id):find(s, 1, true) ~= nil end
+	end
+end)
+
+_G.SyncMoodUI = function(id)
+	for i, m in ipairs(moods) do
+		if m.id == id then curMoodLbl.Text = "▶ Đang phát:\n" .. (m.name or tostring(id)); return end
+	end
+	curMoodLbl.Text = "▶ Đang phát:\n" .. tostring(id)
+end
+
+local function refreshAvatars()
+	for _, v in ipairs(avatarScroll:GetChildren()) do if v:IsA("TextButton") then v:Destroy() end end
+	local all = readJSON(FILE_NAME)
+	for i, d in ipairs(all) do
+		local btn = Instance.new("TextButton")
+		btn.Size = UDim2.new(1, -12, 0, 40); btn.BackgroundColor3 = Theme.Item
+		btn.Text = ""; btn.AutoButtonColor = false; btn.Parent = avatarScroll
+		Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
+		local thumb = Instance.new("ImageLabel")
+		thumb.Size = UDim2.new(0, 34, 0, 34); thumb.Position = UDim2.new(0, 3, 0, 3)
+		thumb.BackgroundColor3 = Theme.Panel; thumb.Image = d.thumbnail or ""; thumb.Parent = btn
+		Instance.new("UICorner", thumb).CornerRadius = UDim.new(0, 6)
+		local nameLbl = Instance.new("TextLabel")
+		nameLbl.Size = UDim2.new(1, -140, 0, 18); nameLbl.Position = UDim2.new(0, 42, 0, 3)
+		nameLbl.BackgroundTransparency = 1; nameLbl.Text = d.name or ("Avatar " .. i)
+		nameLbl.TextColor3 = Theme.Text; nameLbl.Font = Enum.Font.GothamMedium
+		nameLbl.TextSize = 13; nameLbl.TextXAlignment = Enum.TextXAlignment.Left; nameLbl.Parent = btn
+		local moodLbl = Instance.new("TextLabel")
+		moodLbl.Size = UDim2.new(1, -140, 0, 14); moodLbl.Position = UDim2.new(0, 42, 0, 20)
+		moodLbl.BackgroundTransparency = 1
+		local moodTxt = "—"
+		if d.mood then moodTxt = "🎭 " .. (d.mood.name or d.mood.id); if d.mood.faceId then moodTxt = moodTxt .. " 😀" end end
+		moodLbl.Text = moodTxt; moodLbl.TextColor3 = Theme.Sub; moodLbl.Font = Enum.Font.Gotham
+		moodLbl.TextSize = 11; moodLbl.TextXAlignment = Enum.TextXAlignment.Left; moodLbl.Parent = btn
+
+		local shareBtn = Instance.new("TextButton")
+		shareBtn.Size = UDim2.new(0, 56, 0, 30); shareBtn.Position = UDim2.new(1, -94, 0, 5)
+		shareBtn.BackgroundColor3 = Theme.Accent1; shareBtn.Text = "📤"
+		shareBtn.TextColor3 = Color3.new(1,1,1); shareBtn.Font = Enum.Font.GothamBold
+		shareBtn.TextSize = 13; shareBtn.AutoButtonColor = false; shareBtn.Parent = btn
+		Instance.new("UICorner", shareBtn).CornerRadius = UDim.new(0, 6)
+		shareBtn.MouseButton1Click:Connect(function()
+			local code = exportAvatarCode(d)
+			if not code then log("❌ Không tạo được mã chia sẻ"); return end
+			if setclipboard then pcall(setclipboard, code) end
+			log("📤 Đã tạo mã chia sẻ cho: " .. tostring(d.name))
+			openShareCodeDialog(code)
+		end)
+
+		local del = Instance.new("TextButton")
+		del.Size = UDim2.new(0, 30, 0, 30); del.Position = UDim2.new(1, -34, 0, 5)
+		del.BackgroundColor3 = Theme.Danger; del.Text = "🗑"; del.TextColor3 = Color3.new(1,1,1)
+		del.Font = Enum.Font.GothamBold; del.TextSize = 14; del.AutoButtonColor = false; del.Parent = btn
+		Instance.new("UICorner", del).CornerRadius = UDim.new(0, 6)
+		del.MouseButton1Click:Connect(function()
+			local all2 = readJSON(FILE_NAME); table.remove(all2, i); writeJSON(FILE_NAME, all2); refreshAvatars()
+			log("Đã xoá avatar: " .. (d.name or i))
+		end)
+		btn.MouseEnter:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Accent1}):Play() end)
+		btn.MouseLeave:Connect(function() TweenService:Create(btn, TweenInfo.new(0.15), {BackgroundColor3 = Theme.Item}):Play() end)
+		btn.MouseButton1Click:Connect(function() loadAvatar(d) end)
+	end
+end
+
+importBtn.MouseButton1Click:Connect(function()
+	local d, ov = makeDialog(440, 235, "📥 NHẬP MÃ AVATAR TỪ BẠN BÈ")
+	local codeIn = Instance.new("TextBox")
+	codeIn.Size = UDim2.new(1, -24, 0, 86); codeIn.Position = UDim2.new(0, 12, 0, 42)
+	codeIn.BackgroundColor3 = Theme.Item; codeIn.TextColor3 = Color3.new(1,1,1)
+	codeIn.Text = ""; codeIn.PlaceholderText = "Dán mã AVH1:... vào đây"
+	codeIn.PlaceholderColor3 = Theme.Sub; codeIn.MultiLine = true; codeIn.TextWrapped = true
+	codeIn.ClearTextOnFocus = false; codeIn.Font = Enum.Font.Code; codeIn.TextSize = 11
+	codeIn.ZIndex = 102; codeIn.Parent = d
+	Instance.new("UICorner", codeIn).CornerRadius = UDim.new(0, 6)
+
+	local renameIn = Instance.new("TextBox")
+	renameIn.Size = UDim2.new(1, -24, 0, 30); renameIn.Position = UDim2.new(0, 12, 0, 134)
+	renameIn.BackgroundColor3 = Theme.Item; renameIn.TextColor3 = Color3.new(1,1,1)
+	renameIn.Text = ""; renameIn.PlaceholderText = "Đặt tên mới (tùy chọn)"
+	renameIn.PlaceholderColor3 = Theme.Sub; renameIn.Font = Enum.Font.Gotham; renameIn.TextSize = 12
+	renameIn.ClearTextOnFocus = false; renameIn.ZIndex = 102; renameIn.Parent = d
+	Instance.new("UICorner", renameIn).CornerRadius = UDim.new(0, 6)
+
+	local okBtn = Instance.new("TextButton")
+	okBtn.Size = UDim2.new(0.45, 0, 0, 30); okBtn.Position = UDim2.new(0.05, 0, 1, -38)
+	okBtn.BackgroundColor3 = Theme.Success; okBtn.Text = "LƯU & ÁP DỤNG"
+	okBtn.TextColor3 = Color3.new(1,1,1); okBtn.Font = Enum.Font.GothamBold; okBtn.TextSize = 11
+	okBtn.ZIndex = 102; okBtn.Parent = d
+	Instance.new("UICorner", okBtn).CornerRadius = UDim.new(0, 6)
+
+	local noBtn = Instance.new("TextButton")
+	noBtn.Size = UDim2.new(0.45, 0, 0, 30); noBtn.Position = UDim2.new(0.5, 0, 1, -38)
+	noBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 85); noBtn.Text = "HUỶ"
+	noBtn.TextColor3 = Color3.new(1,1,1); noBtn.Font = Enum.Font.GothamBold; noBtn.TextSize = 11
+	noBtn.ZIndex = 102; noBtn.Parent = d
+	Instance.new("UICorner", noBtn).CornerRadius = UDim.new(0, 6)
+
+	okBtn.MouseButton1Click:Connect(function()
+		local imported, err = importAvatarCode(codeIn.Text, renameIn.Text)
+		if not imported then
+			log("❌ Nhập mã thất bại: " .. tostring(err))
+			return
+		end
+		refreshAvatars()
+		loadAvatar(imported)
+		log("✅ Đã nhập & áp dụng avatar: " .. tostring(imported.name))
+		d:Destroy(); ov:Destroy()
+	end)
+	noBtn.MouseButton1Click:Connect(function() d:Destroy(); ov:Destroy() end)
+end)
+
+saveBtn.MouseButton1Click:Connect(function()
+	if saveAvatar(nameInput.Text) then
+		saveBtn.Text = "✓ ĐÃ LƯU"; nameInput.Text = ""; refreshAvatars()
+		task.delay(2, function() if saveBtn.Parent then saveBtn.Text = "💾 LƯU AVATAR + MOOD + FACE" end end)
+	else
+		saveBtn.Text = "✗ LỖI"
+		task.delay(2, function() if saveBtn.Parent then saveBtn.Text = "💾 LƯU AVATAR + MOOD + FACE" end end)
+	end
+end)
+
+refreshAvatars()
+
+UserInputService.InputBegan:Connect(function(i, gpe)
+	if gpe then return end
+	if i.KeyCode == Enum.KeyCode.F2 then mainFrame.Visible = not mainFrame.Visible end
+end)
+
+log("✅ Avatar + Mood + Face + Emote + Anim + Script + Share Hub đã sẵn sàng")
